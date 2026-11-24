@@ -66,3 +66,9 @@ python tools/package.py      # build dist/localization-qa-triage.zip
 Don't commit client content: article text, batch spreadsheets, results or triage reports.
 Put working files in `runs/` (git-ignored). Client glossaries and style guides must never be added
 to this repo or the skill package.
+
+### 📝 License
+
+This project is licensed under the Apache 2.0 License. © 2026 Vistatec, Ltd.
+
+---
