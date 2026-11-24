@@ -1,0 +1,16 @@
+# Client data and outputs: never commit
+runs/
+*.xlsx
+*.xls
+*.csv
+!.claude/skills/localization-qa-triage/assets/*.csv
+results.json
+!tests/fixtures/results.json
+
+# Build
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.DS_Store

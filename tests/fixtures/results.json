@@ -1,0 +1,13 @@
+[
+ {"id":"Row 2","source_url":"https://example.com/en-us/backup","target_url":"https://example.com/de-de/backup","source_locale":"en-US","target_locale":"de-DE","title":"How to set up Contoso Cloud backup","extraction":"ok","extraction_note":"","summary":"Backup interval changed from 24 to 12 hours and a warning step is missing.",
+  "issues":[
+   {"category":"Untranslated","severity":"Major","confidence":"High","source":"Before you start","target":"Before you start","explanation":"Heading left in English."},
+   {"category":"Numbers","severity":"Critical","confidence":"High","source":"every 24 hours","target":"alle 12 Stunden","explanation":"Backup interval changed from 24 to 12 hours."},
+   {"category":"Omission","severity":"Major","confidence":"High","source":"Do not turn off your device during the first backup.","target":"[missing]","explanation":"Warning list item missing."},
+   {"category":"Untranslated","severity":"Major","confidence":"High","source":"You need version 3.2 or later.","target":"You need version 3.2 or later.","explanation":"List item left in English."},
+   {"category":"Omission","severity":"Minor","confidence":"Medium","source":"for help","target":"[missing]","explanation":"'for help' dropped; meaning mostly preserved."}]},
+ {"id":"Row 3","source_url":"https://example.com/en-us/a","target_url":"https://example.com/fr-fr/a","source_locale":"en-US","target_locale":"fr-FR","title":"Article A","extraction":"ok","summary":"One sentence meaning shifted.","issues":[{"category":"Accuracy","severity":"Major","confidence":"Medium","source":"may","target":"doit","explanation":"'may' became 'must'."}]},
+ {"id":"Row 4","source_url":"https://example.com/en-us/b","target_url":"https://example.com/ja-jp/b","source_locale":"en-US","target_locale":"ja-JP","title":"Article B","extraction":"ok","summary":"No issues found.","issues":[]},
+ {"id":"Row 5","source_url":"https://example.com/en-us/c","target_url":"https://example.com/es-es/c","source_locale":"en-US","target_locale":"es-ES","title":"Article C","extraction":"failed","extraction_note":"target returned a consent page","summary":"Target text could not be read.","issues":[]},
+ {"id":"Row 6","source_url":"https://example.com/en-us/d","target_url":"https://example.com/it-it/d","source_locale":"en-US","target_locale":"it-IT","title":"Article D","extraction":"ok","summary":"Possible intentional adaptation only.","issues":[{"category":"Locale","severity":"Minor","confidence":"Low","source":"$20","target":"20 €","explanation":"Currency changed; may be intentional."}]}
+]

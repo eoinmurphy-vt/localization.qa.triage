@@ -1,0 +1,5 @@
+source_term,target_term,target_locale,status,notes
+Sign in,Anmelden,de-DE,approved,UI string
+log in,einloggen,de-DE,forbidden,Use "anmelden"
+Contoso Cloud,Contoso Cloud,de-DE,dnt,Product name - never translate
+dashboard,Dashboard,de-DE,approved,
