@@ -100,7 +100,10 @@ Work in a folder per batch, e.g. `runs/<batch>/`.
    scripted requests), use the web fetch tool one article at a time.
 3. **Analyse** each article as above. As soon as an article is done, append its result object as
    one line to `runs/<batch>/results.jsonl` (schema in `references/output_format.md`), so progress
-   survives an interrupted session. Don't paste article text into the chat.
+   survives an interrupted session. Don't paste article text into the chat. With saved texts, run
+   `python scripts/batch.py check runs/<batch>/results.jsonl --batch runs/<batch>/batch.jsonl
+   --texts runs/<batch>/texts` after every few articles and fix anything it lists: it confirms
+   every quote is verbatim and every value is valid.
 4. **Progress.** After every 10 or so articles, run
    `python scripts/batch.py status runs/<batch>/batch.jsonl runs/<batch>/results.jsonl` and post
    its one-line summary (e.g. "20/150 done: High 3, Medium 6, Low 11").
@@ -108,7 +111,8 @@ Work in a folder per batch, e.g. `runs/<batch>/`.
    `references/batch_workflow.md` (resume in a new chat, or subagents in Claude Code).
 6. **Report.** `python scripts/build_report.py runs/<batch>/results.jsonl --batch
    runs/<batch>/batch.jsonl --out runs/<batch>/triage_report.xlsx` (add `--mode client-assets`
-   if client assets were applied). It checks the result values (fix the file and re-run if it lists
+   if client assets were applied, and `--notes runs/<batch>/batch_notes.txt` with one batch-level
+   finding per line: template problems, patterns repeated across many articles, dead links). It checks the result values (fix the file and re-run if it lists
    errors), computes every rating with the rule above, sorts High → Check manually → Medium → Low →
    Not processed, and adds columns for reviewer status, minutes spent and notes.
 7. Give the user the file and a 3–5 line summary: counts per tier, the most common issue types,

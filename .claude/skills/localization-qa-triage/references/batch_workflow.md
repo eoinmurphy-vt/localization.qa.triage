@@ -27,7 +27,8 @@ across subagents (Claude Code). The files in `runs/<batch>/` carry the state bet
 ## Claude Code
 
 - Network access is normally available, so run `batch.py fetch` once for the whole batch
-  (`--workers 4` by default; lower it if the site rate-limits).
+  (`--workers 4` by default; lower it if the site rate-limits), then `batch.py unreadable` so
+  dead links and sign-in pages are recorded without analysis.
 - For more than about 15 articles, use subagents so the main conversation stays small:
   1. `batch.py status runs/<batch>/batch.jsonl runs/<batch>/results --chunks 10` prints the
      remaining IDs in groups of 10.
@@ -39,7 +40,8 @@ across subagents (Claude Code). The files in `runs/<batch>/` carry the state bet
      > `runs/<batch>/texts/<key>.*.txt` (the key is in batch.jsonl). Mode: <generic | client
      > assets at path>. For each article, append one result object per line to
      > `runs/<batch>/results/chunk-<NN>.jsonl` (schema in the skill's
-     > references/output_format.md). Don't build the report. Reply with one line per article:
+     > references/output_format.md). Then run `batch.py check` on your chunk file and fix
+     > anything it reports. Don't build the report. Reply with one line per article:
      > ID, rating, main issue.
 
   3. Each subagent writes its own chunk file, so parallel agents never write to the same file.

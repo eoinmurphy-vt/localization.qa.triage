@@ -232,8 +232,13 @@ def test_report_merges_folders_dedupes_and_lists_unprocessed(tmp_path):
                                               "target_url": "https://e.com/de/a", "title": f"T{i[-1]}"}) + "\n"
                                   for i in ("Row 2", "Row 3", "Row 4")), encoding="utf-8")
     out = tmp_path / "r.xlsx"
-    proc = run(SCRIPTS / "build_report.py", chunks, "--batch", batch_file, "--out", out)
-    assert "more than once" in proc.stderr
+    notes = tmp_path / "notes.txt"
+    notes.write_text("- Every page shows the date in English.\n\n- Spaces lost next to links.\n", encoding="utf-8")
+    proc = run(SCRIPTS / "build_report.py", chunks, "--batch", batch_file, "--out", out, "--notes", notes)
+    assert "more than once; using the later one in chunk-02.jsonl" in proc.stderr
+    about = [r for r in openpyxl.load_workbook(out)["About"].iter_rows(values_only=True)]
+    assert ("Batch findings", "Every page shows the date in English.") in [r[:2] for r in about]
+    assert (None, "Spaces lost next to links.") in [r[:2] for r in about]
     assert [(r[1], r[2], r[9]) for r in report_rows(out)] == [     # titles come from the batch
         ("Row 2", "High", "T2"), ("Row 3", "Medium", "T3"), ("Row 4", "Not processed", "T4")]
     quote = openpyxl.load_workbook(out)["Issues"]["F2"]
@@ -319,6 +324,27 @@ def test_batch_fetch_and_status(tmp_path):
     out = run(SCRIPTS / "batch.py", "status", batch_file, results, tmp_path / "none.jsonl").stdout
     assert out.splitlines()[0] == "1/2 done: High 1"
     assert "Remaining (1): Row 3" in out
+
+
+def test_batch_check_catches_paraphrased_quotes(tmp_path):
+    batch_file = tmp_path / "batch.jsonl"
+    batch_file.write_text(json.dumps({"id": "A", "key": "A", "source_url": str(FIX / "src.html"),
+                                      "target_url": str(FIX / "tgt.html")}) + "\n", encoding="utf-8")
+    texts = tmp_path / "texts"
+    run(SCRIPTS / "batch.py", "fetch", batch_file, "--texts", texts)
+    good = {"id": "A", "issues": [
+        _issue(source="backs up your files automatically every 24 hours",
+               target="sichert Ihre Dateien … alle 12 Stunden"),                 # parts joined by …
+        _issue(category="Omission", source="Do not turn off your device during the first backup.",
+               target="[missing]")]}
+    res = tmp_path / "r.jsonl"
+    res.write_text(json.dumps(good) + "\n", encoding="utf-8")
+    ok = run(SCRIPTS / "batch.py", "check", res, "--batch", batch_file, "--texts", texts)
+    assert "OK: 1 results, 3 quotes found verbatim." in ok.stdout
+    bad = {"id": "A", "issues": [_issue(source="backs up your files every day", target="alle 12 Stunden")]}
+    res.write_text(json.dumps(bad) + "\n", encoding="utf-8")
+    proc = run(SCRIPTS / "batch.py", "check", res, "--batch", batch_file, "--texts", texts, check=False)
+    assert proc.returncode == 2 and "source quote is not verbatim" in proc.stdout
 
 
 def test_batch_unreadable_records_check_manually(tmp_path):

@@ -3,7 +3,7 @@
 
 Usage:
     python build_report.py RESULTS... --out triage_report.xlsx [--batch batch.jsonl]
-                           [--mode generic|client-assets]
+                           [--mode generic|client-assets] [--notes batch_notes.txt]
 
 RESULTS are .jsonl files (one result object per line), .json files (an array or one
 object) or folders of them. If an article appears more than once, the last one wins.
@@ -86,7 +86,7 @@ def load_results(paths):
                 raise SystemExit(f"{f}: item {n} is not a JSON object")
             key = str(a.get("id") or f"{f.name}#{n}")
             if key in by_id:
-                warnings.append(f"{key}: result appears more than once; keeping the last one")
+                warnings.append(f"{key}: result appears more than once; using the later one in {f.name}")
                 del by_id[key]
             by_id[key] = a
     return list(by_id.values()), warnings
@@ -228,7 +228,7 @@ def prepare(articles):
     articles.sort(key=lambda a: (RISK_ORDER[a["risk"]], -a["_score"]))
 
 
-def write_workbook(articles, out, mode):
+def write_workbook(articles, out, mode, notes=()):
     from openpyxl import Workbook
 
     st = _styles()
@@ -294,6 +294,8 @@ def write_workbook(articles, out, mode):
                         "(Issues). The pilot metrics below update as you go."),
         ("", ""),
     ]
+    if notes:
+        rows += [("Batch findings", notes[0])] + [("", n) for n in notes[1:]] + [("", "")]
     for r, (k, v) in enumerate(rows, 1):
         put(wa, r, 1, k).font = st["Font"](bold=True)
         put(wa, r, 2, v, st["wrap"])
@@ -343,7 +345,12 @@ def main():
     ap.add_argument("--out", default="triage_report.xlsx")
     ap.add_argument("--batch", help="batch.jsonl from batch.py init: list articles with no result")
     ap.add_argument("--mode", default="generic", choices=["generic", "client-assets"])
+    ap.add_argument("--notes", help="text file, one batch-level finding per line (shown on the About sheet)")
     args = ap.parse_args()
+    notes = []
+    if args.notes:
+        with open(args.notes, encoding="utf-8-sig") as f:
+            notes = [line.strip().lstrip("-• ").strip() for line in f if line.strip()]
 
     articles, warnings = load_results(args.results)
     for w in warnings:
@@ -371,7 +378,7 @@ def main():
                                  "extraction": "", "issues": [], "summary": ""})
 
     prepare(articles)
-    totals = write_workbook(articles, args.out, args.mode)
+    totals = write_workbook(articles, args.out, args.mode, notes)
     print(f"Wrote {args.out}: {len(articles)} articles - " +
           ", ".join(f"{k} {totals[k]}" for k in RISK_ORDER if totals[k]))
 

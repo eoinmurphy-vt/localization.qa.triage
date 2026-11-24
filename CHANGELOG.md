@@ -30,6 +30,11 @@
     sheet's title column into the report.
   - Template problems repeated on every page (e.g. an untranslated date label) are reported once
     per batch, not per article.
+  - `batch.py unreadable` records 404s, timeouts and sign-in redirects as Check manually without
+    analysis; fetches retry once; the "short text" threshold is 50 words.
+  - `batch.py check` confirms every quote appears verbatim in the saved texts and every value is
+    valid; subagents run it before handing back.
+  - `build_report.py --notes` adds batch-level findings to the About sheet.
 
 ## v0.1.0 – pilot
 - First version: single-article and batch triage, generic mode, optional client assets.

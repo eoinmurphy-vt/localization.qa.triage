@@ -8,6 +8,7 @@ Usage:
     python batch.py fetch runs/b1/batch.jsonl --texts runs/b1/texts [--workers 4]
                           [--ids "Row 2,Row 3"] [--refetch]
     python batch.py unreadable runs/b1/batch.jsonl --texts runs/b1/texts --out runs/b1/results.jsonl
+    python batch.py check RESULTS... --batch runs/b1/batch.jsonl --texts runs/b1/texts
     python batch.py status runs/b1/batch.jsonl RESULTS... [--chunks 10]
 
 init    Finds the source and target URL columns (and ID and title columns, if any) in an
@@ -21,6 +22,8 @@ fetch   Needs network access. Saves <key>.source.txt, <key>.target.txt and
 unreadable  Appends a "Check manually" result for every article whose page couldn't be
         fetched (404, no response) or redirected to another site (e.g. a sign-in page), so
         only readable articles need analysing.
+check   Validates result values and confirms every quote appears verbatim in the saved texts
+        (curly/straight quotes and spacing are ignored; "…" may join parts of a quote).
 status  Shows how many articles have a result and which are still to do, so a batch can
         be resumed in a new session. RESULTS are the files/folders given to build_report.py
         (missing ones count as empty). --chunks N splits the remaining IDs into groups of N.
@@ -350,6 +353,56 @@ def cmd_unreadable(args):
           + (": " + "; ".join(f"{v} {k}" for k, v in reasons.most_common()) if rows else ""))
 
 
+# ---------------------------------------------------------------- check
+
+def _norm_quote(s: str) -> str:
+    for a, b in (("’", "'"), ("‘", "'"), ("“", '"'), ("”", '"'),
+                 (" ", " "), (" ", " "), (" ", " ")):
+        s = s.replace(a, b)
+    return " ".join(s.split())
+
+
+def cmd_check(args):
+    """Every value valid and every quote verbatim in the saved texts (a guard against made-up evidence)."""
+    items = {str(i["id"]): i for i in build_report.load_batch(args.batch)}
+    results, warnings = build_report.load_results(args.results)
+    problems = build_report.normalise(results)
+    texts = Path(args.texts)
+    checked = 0
+    for a in results:
+        aid = str(a.get("id"))
+        it = items.get(aid)
+        if it is None:
+            problems.append(f"{aid}: not in the batch file (check the id)")
+            continue
+        if a.get("extraction") == "failed" or not a.get("issues"):
+            continue
+        sides = {}
+        for side in ("source", "target"):
+            path = texts / f"{it['key']}.{side}.txt"
+            sides[side] = _norm_quote(path.read_text(encoding="utf-8")) if path.exists() else None
+        for n, issue in enumerate(a["issues"], 1):
+            for side, text in sides.items():
+                quote = str(issue.get(side) or "").strip()
+                if quote.lower() == "[missing]":
+                    continue
+                if not quote:
+                    problems.append(f"{aid}: issue {n} has no {side} quote (use [missing] for omissions)")
+                elif text is None:
+                    problems.append(f"{aid}: no saved {side} text to check quotes against")
+                elif not all(part in text for part in re.split(r"\s*(?:…|\.\.\.)\s*", _norm_quote(quote)) if part):
+                    problems.append(f"{aid}: issue {n} {side} quote is not verbatim: {quote[:90]}")
+                else:
+                    checked += 1
+    for w in warnings:
+        print("WARNING:", w)
+    if problems:
+        print(f"{len(problems)} problem(s) to fix:")
+        print("\n".join("  - " + p for p in problems))
+        sys.exit(2)
+    print(f"OK: {len(results)} results, {checked} quotes found verbatim.")
+
+
 # ---------------------------------------------------------------- status
 
 def cmd_status(args):
@@ -404,6 +457,11 @@ def main():
     p.add_argument("--texts", required=True)
     p.add_argument("--out", required=True, help="results file to append to, e.g. runs/b1/results.jsonl")
     p.set_defaults(func=cmd_unreadable)
+    p = sub.add_parser("check", help="validate results and check quotes against the saved texts")
+    p.add_argument("results", nargs="+")
+    p.add_argument("--batch", required=True)
+    p.add_argument("--texts", required=True)
+    p.set_defaults(func=cmd_check)
     p = sub.add_parser("status", help="progress and remaining IDs")
     p.add_argument("batch")
     p.add_argument("results", nargs="*")
