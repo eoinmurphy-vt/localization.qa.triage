@@ -19,9 +19,10 @@ Pre-check signals checked and dismissed: <optional, one line, e.g. "3 numbers re
 
 If there are no issues: `RISK: Low`, a one-line summary and "No issues found."
 
-## Batch: result object (one per article, appended to results.json)
+## Batch: result object (one line per article in results.jsonl)
 
-`results.json` is a JSON array. Each element:
+`results.jsonl` holds one JSON object per line (JSON Lines). Append a line as soon as an article
+is finished; never rewrite the file. Shown here pretty-printed; in the file it is one line:
 
 ```json
 {
@@ -39,7 +40,7 @@ If there are no issues: `RISK: Low`, a one-line summary and "No issues found."
       "category": "Omission",
       "severity": "Major",
       "confidence": "High",
-      "source": "short source quote",
+      "source": "short verbatim source quote",
       "target": "[missing]",
       "explanation": "One sentence."
     }
@@ -48,13 +49,18 @@ If there are no issues: `RISK: Low`, a one-line summary and "No issues found."
 ```
 
 Allowed values:
-- `extraction`: `ok`, `partial`, `failed` (`failed` → rating becomes Check manually; `partial` is
-  noted in the report and lowers trust in omission findings)
+- `extraction`: `ok`, `partial`, `failed`
+  - `failed` → the rating becomes Check manually. Use it when a page couldn't be read, was a
+    login/consent/bot-check/error page, redirected elsewhere, or the two pages are not the same
+    article. Say which in `extraction_note`.
+  - `partial` → readable but incomplete (e.g. tabs or accordions not captured); say what is
+    missing in `extraction_note` and use Low confidence for omissions in that area.
 - `category`: Accuracy, Omission, Addition, Numbers, Untranslated, Terminology, Fluency, Locale,
   Rendering, Cultural
 - `severity`: Critical, Major, Minor
 - `confidence`: High, Medium, Low
 
 Don't include a risk field: `build_report.py` computes it from the issues using the rule in SKILL.md.
-Keep `id` equal to whatever identifies the row in the reviewer's original spreadsheet (an ID column
-if there is one, otherwise "Row N" with the spreadsheet row number).
+Keep `id` exactly as in `batch.jsonl` (the spreadsheet's ID column, or "Row N" with the spreadsheet
+row number), so the report can match results to rows and list anything not processed.
+`build_report.py` also accepts a `.json` array, for older runs.

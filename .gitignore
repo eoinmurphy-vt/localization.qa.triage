@@ -5,6 +5,8 @@ runs/
 *.csv
 !.claude/skills/localization-qa-triage/assets/*.csv
 results.json
+results.jsonl
+batch.jsonl
 !tests/fixtures/results.json
 
 # Build

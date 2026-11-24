@@ -16,9 +16,9 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements-dev.txt
-      - run: pytest -q
-      - run: ./tools/package.sh
-      - name: Create GitHub release with the ZIP
+      - run: python -m pytest -q
+      - run: python tools/package.py
+      - name: Create GitHub release with the ZIP and the prompt
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/localization-qa-triage.zip --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/localization-qa-triage.zip prompts/triage-prompt.md --title "$GITHUB_REF_NAME" --generate-notes

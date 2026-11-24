@@ -42,7 +42,10 @@ Numbers, prices, currencies, percentages, dates, times, versions, units, phone n
 email addresses and product SKUs that don't match the source.
 - Locale-correct reformatting is **not** an error (1,000.50 → 1.000,50; MM/DD → DD.MM; 12-hour → 24-hour).
 - Unit or currency conversion may be intentional; flag with Low confidence unless clearly wrong.
-- Critical: prices, dates/deadlines of offers, specifications, dosages, legal figures.
+- The pre-check already treats 1,000.50 and 1.000,50 (and native digits such as ٣ or ३) as equal,
+  so most numbers it reports differ in value or are missing. Dates and times written in words
+  (31 December vs 31.12.) can still show up as signals: check them before flagging.
+- Critical: prices, fees, limits, dates/deadlines of offers, specifications, dosages, legal figures.
 - Major: other factual numbers.
 
 ### 4. Untranslated or wrong-language text
