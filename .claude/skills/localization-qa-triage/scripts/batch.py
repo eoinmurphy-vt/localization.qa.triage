@@ -4,17 +4,23 @@
 Usage:
     python batch.py init SPREADSHEET --out runs/b1/batch.jsonl [--sheet NAME]
                          [--source-col COL] [--target-col COL ...] [--id-col COL]
+                         [--source-locale en-US] [--target-locale de-DE]
     python batch.py fetch runs/b1/batch.jsonl --texts runs/b1/texts [--workers 4]
                           [--ids "Row 2,Row 3"] [--refetch]
+    python batch.py unreadable runs/b1/batch.jsonl --texts runs/b1/texts --out runs/b1/results.jsonl
     python batch.py status runs/b1/batch.jsonl RESULTS... [--chunks 10]
 
-init    Finds the source and target URL columns (and an ID column, if any) in an .xlsx or
-        .csv file, guesses locales from the URLs and writes one JSON line per article.
-        COL is a header name, a column letter (B) or a 1-based number. Several target
-        columns (one per language) give one article per target.
+init    Finds the source and target URL columns (and ID and title columns, if any) in an
+        .xlsx or .csv file, guesses locales from the URLs (or takes them from the flags) and
+        writes one JSON line per article. Exact duplicate rows are skipped; rows that share
+        the same links are reported. COL is a header name, a column letter (B) or a 1-based
+        number. Several target columns (one per language) give one article per target.
 fetch   Needs network access. Saves <key>.source.txt, <key>.target.txt and
         <key>.precheck.txt per article in the texts folder, plus fetch_log.jsonl.
         Articles fetched before are skipped unless --refetch.
+unreadable  Appends a "Check manually" result for every article whose page couldn't be
+        fetched (404, no response) or redirected to another site (e.g. a sign-in page), so
+        only readable articles need analysing.
 status  Shows how many articles have a result and which are still to do, so a batch can
         be resumed in a new session. RESULTS are the files/folders given to build_report.py
         (missing ones count as empty). --chunks N splits the remaining IDs into groups of N.
@@ -40,13 +46,9 @@ SOURCE_HINT = re.compile(r"source|\bsrc\b|original|english|\ben\b|\bfrom\b", re.
 TARGET_HINT = re.compile(r"target|\btgt\b|transl|locali[sz]ed|\bto\b", re.I)
 ID_HINT = re.compile(r"^\s*(id|article\s*id|#|no\.?|number|key|ref(erence)?)\s*$", re.I)
 LOCALE_HINT = re.compile(r"locale|language|\blang\b|market", re.I)
-LANGS = {
-    "af", "am", "ar", "az", "be", "bg", "bn", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es",
-    "et", "eu", "fa", "fi", "fil", "fr", "ga", "gl", "gu", "he", "hi", "hr", "ht", "hu", "hy", "id",
-    "is", "it", "ja", "ka", "kk", "km", "kn", "ko", "lo", "lt", "lv", "mk", "ml", "mn", "mr", "ms",
-    "my", "nb", "ne", "nl", "no", "pa", "pl", "ps", "pt", "ro", "ru", "si", "sk", "sl", "so", "sq",
-    "sr", "sv", "sw", "ta", "te", "th", "tl", "tr", "uk", "ur", "uz", "vi", "zh", "zu",
-}
+TITLE_HINT = re.compile(r"title|headline|subject|^\s*(article\s*)?name\s*$", re.I)
+LANGS = extract_text.LANGS
+guess_locale = extract_text.guess_locale
 
 
 # ---------------------------------------------------------------- reading the spreadsheet
@@ -111,25 +113,6 @@ def letter(j: int) -> str:
     return s
 
 
-def guess_locale(url: str) -> str:
-    """Best-effort locale from a URL path (/de-de/, /fr/, /ca/fr/) or subdomain (de.example.com)."""
-    parts = urlsplit(url or "")
-    segs = [s for s in parts.path.lower().split("/") if s][:4]
-    for s in segs:
-        m = re.fullmatch(r"([a-z]{2,3})[-_]([a-z]{2}|\d{3}|hans|hant)", s)
-        if m and m.group(1) in LANGS:
-            region = m.group(2)
-            return f"{m.group(1)}-{region.upper() if len(region) == 2 else region.title()}"
-    for a, b in zip(segs, segs[1:]):                     # /{country}/{language}/
-        if len(a) == 2 and len(b) == 2 and b in LANGS:
-            return f"{b}-{a.upper()}"
-    for s in segs:
-        if s in LANGS:
-            return s
-    sub = (parts.hostname or "").split(".")[0]
-    return sub if sub in LANGS else ""
-
-
 def _norm_locale(v) -> str:
     s = str(v or "").strip()
     m = re.fullmatch(r"([A-Za-z]{2,3})(?:[-_]([A-Za-z]{2}))?", s)
@@ -181,8 +164,13 @@ def cmd_init(args):
         id_col = next((j for j, h in enumerate(headers) if ID_HINT.match(h)), None)
     loc_col = next((j for j, h in enumerate(headers)
                     if LOCALE_HINT.search(h) and j not in (src, *tgts, id_col)), None)
+    title_col = next((j for j, h in enumerate(headers)
+                      if TITLE_HINT.search(h) and j not in (src, *tgts, id_col, loc_col)), None)
 
     items, keys, skipped = [], set(), 0
+    seen = {}          # (sheet id, source url, target url) -> first row
+    by_urls = {}       # (source url, target url) -> [(row, sheet id)]
+    duplicates, ids = [], Counter()
     for n, vals in data:
         base = _cell(vals, id_col) if id_col is not None else None
         if isinstance(base, float) and base.is_integer():
@@ -193,7 +181,16 @@ def cmd_init(args):
             if _blank(s_url) or _blank(t_url):
                 skipped += 1
                 continue
+            s_url, t_url = str(s_url).strip(), str(t_url).strip()
             aid = base if len(tgts) == 1 else f"{base} {headers[t] or letter(t)}"
+            if (aid, s_url, t_url) in seen:                # the same article listed twice
+                duplicates.append(f"row {n} repeats row {seen[(aid, s_url, t_url)]} ({aid})")
+                continue
+            seen[(aid, s_url, t_url)] = n
+            by_urls.setdefault((s_url, t_url), []).append((n, aid))
+            ids[aid] += 1
+            if ids[aid] > 1:                               # same ID, different links
+                aid = f"{aid} (row {n})"
             key = re.sub(r"[^\w.-]+", "_", aid).strip("_")[:60] or f"row{n}"
             k, i = key, 2
             while k.lower() in keys:
@@ -201,14 +198,16 @@ def cmd_init(args):
             keys.add(k.lower())
             hint = _cell(vals, loc_col) if loc_col is not None else None
             items.append({
-                "id": aid, "row": n, "key": k,
-                "source_url": str(s_url).strip(), "target_url": str(t_url).strip(),
-                "source_locale": guess_locale(str(s_url)),
-                "target_locale": guess_locale(str(t_url)) or _norm_locale(hint),
+                "id": aid, "row": n, "key": k, "source_url": s_url, "target_url": t_url,
+                "source_locale": args.source_locale or guess_locale(s_url),
+                "target_locale": args.target_locale or guess_locale(t_url) or _norm_locale(hint),
                 **({"locale_hint": str(hint)} if not _blank(hint) else {}),
+                **({"title": str(_cell(vals, title_col)).strip()}
+                   if title_col is not None and not _blank(_cell(vals, title_col)) else {}),
             })
     if not items:
         raise SystemExit("No rows with both a source and a target URL.")
+    shared = [rows for rows in by_urls.values() if len(rows) > 1]
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -223,9 +222,18 @@ def cmd_init(args):
         print("Other sheets (not read): " + ", ".join(other_sheets))
     print(f"Source URL: {name(src)}   Target URL: " + ", ".join(name(t) for t in tgts)
           + f"   ID: {name(id_col) if id_col is not None else 'row number'}")
-    print("Locales guessed from URLs: " + ", ".join(f"{k} ({v})" for k, v in pairs.most_common()))
+    print("Locales: " + ", ".join(f"{k} ({v})" for k, v in pairs.most_common())
+          + ("" if args.source_locale or args.target_locale else " (guessed from the URLs)"))
+    if any(not i["source_locale"] or not i["target_locale"] for i in items):
+        print("NOTE: some locales couldn't be guessed; re-run with --source-locale / --target-locale")
     for n in notes:
         print("NOTE:", n)
+    if duplicates:
+        print(f"Skipped {len(duplicates)} duplicate row(s): " + "; ".join(duplicates))
+    for rows in shared:
+        print("WARNING: rows " + ", ".join(str(r) for r, _ in rows) + " ("
+              + ", ".join(i for _, i in rows) + ") have the same source and target URLs:"
+              " the links in the spreadsheet are probably wrong.")
     print(f"Wrote {out}")
 
 
@@ -293,6 +301,55 @@ def cmd_fetch(args):
               "Use the web fetch tool, saved HTML files or pasted text instead.")
 
 
+# ---------------------------------------------------------------- unreadable
+
+def _why_unreadable(url, st):
+    """A short reason if this side of the pair clearly isn't the article, else None."""
+    if st.get("status") == "failed":
+        err = st.get("error") or "could not be fetched"
+        m = re.search(r"HTTP Error (\d+)", err)
+        if m:
+            return "page not found (404)" if m.group(1) in ("404", "410") else f"HTTP error {m.group(1)}"
+        return "no response (timed out)" if re.search(r"timed out|10060|timeout", err, re.I) else err
+    final = st.get("final_url")
+    if final and extract_text.redirect_note(url, final)[1]:
+        return f"redirected to {urlsplit(final).hostname} (sign-in or other page)"
+    return None
+
+
+def cmd_unreadable(args):
+    items = build_report.load_batch(args.batch)
+    log_path = Path(args.texts) / "fetch_log.jsonl"
+    if not log_path.exists():
+        raise SystemExit(f"No {log_path}: run 'batch.py fetch' first.")
+    log = {str(e["id"]): e for e in map(json.loads, log_path.read_text(encoding="utf-8").splitlines()) if e}
+    out = Path(args.out)
+    have = set()
+    if out.exists():
+        have = {str(a.get("id")) for a in build_report.load_results([out])[0]}
+    rows, reasons = [], Counter()
+    for it in items:
+        e = log.get(str(it["id"]))
+        if not e or str(it["id"]) in have:
+            continue
+        why = {side: _why_unreadable(it[f"{side}_url"], e.get(side) or {}) for side in ("source", "target")}
+        if not any(why.values()):
+            continue
+        note = (f"both pages: {why['source']}" if why["source"] == why["target"] else
+                "; ".join(f"{side}: {w}" for side, w in why.items() if w))
+        reasons[note.split(": ", 1)[-1]] += 1
+        rows.append({**{k: it.get(k) for k in ("id", "title", "source_url", "target_url",
+                                               "source_locale", "target_locale") if it.get(k)},
+                     "extraction": "failed", "extraction_note": note,
+                     "summary": "The page could not be read automatically.", "issues": []})
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("a", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    print(f"Recorded {len(rows)} unreadable article(s) as Check manually in {out}"
+          + (": " + "; ".join(f"{v} {k}" for k, v in reasons.most_common()) if rows else ""))
+
+
 # ---------------------------------------------------------------- status
 
 def cmd_status(args):
@@ -332,6 +389,8 @@ def main():
     p.add_argument("--source-col")
     p.add_argument("--target-col", action="append")
     p.add_argument("--id-col")
+    p.add_argument("--source-locale", help="e.g. en-US (default: guessed from the URLs)")
+    p.add_argument("--target-locale", help="e.g. de-DE (default: guessed from the URLs)")
     p.set_defaults(func=cmd_init)
     p = sub.add_parser("fetch", help="extract texts and run the pre-check")
     p.add_argument("batch")
@@ -340,6 +399,11 @@ def main():
     p.add_argument("--ids", help="comma-separated IDs (default: all)")
     p.add_argument("--refetch", action="store_true")
     p.set_defaults(func=cmd_fetch)
+    p = sub.add_parser("unreadable", help="record pages that couldn't be read as Check manually")
+    p.add_argument("batch")
+    p.add_argument("--texts", required=True)
+    p.add_argument("--out", required=True, help="results file to append to, e.g. runs/b1/results.jsonl")
+    p.set_defaults(func=cmd_unreadable)
     p = sub.add_parser("status", help="progress and remaining IDs")
     p.add_argument("batch")
     p.add_argument("results", nargs="*")

@@ -24,6 +24,8 @@ import codecs
 import json
 import re
 import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -55,16 +57,26 @@ SUSPECT_PAGE = re.compile(
     re.I)
 NO_SPACE_SCRIPT = re.compile(r"[぀-ヿ㐀-䶿一-鿿豈-﫿"
                              r"฀-໿က-႟ក-៿]")
-MIN_WORDS = 100
+MIN_WORDS = 50
 
 
-def fetch(url: str):
+def fetch(url: str, retries: int = 1):
+    """Fetch a page; retry once after a timeout, connection error, 429 or 5xx."""
     req = urllib.request.Request(url, headers={
         "User-Agent": "Mozilla/5.0 (compatible; localization-qa-triage)",
         "Accept": "text/html,application/xhtml+xml",
     })
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read(), resp.headers.get_content_charset(), resp.geturl()
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.read(), resp.headers.get_content_charset(), resp.geturl()
+        except urllib.error.HTTPError as e:
+            if attempt == retries or not (e.code == 429 or e.code >= 500):
+                raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if attempt == retries:
+                raise
+        time.sleep(3 * (attempt + 1))
 
 
 def decode(raw: bytes, header_charset=None) -> str:
@@ -95,24 +107,59 @@ def word_count(text: str) -> int:
     return n
 
 
-def _locale_segments(path: str):
-    segs = [s for s in path.lower().split("/") if s][:3]
-    return [s for s in segs if re.fullmatch(r"[a-z]{2,3}(?:[-_][a-z0-9]{2,4})?", s)]
+LANGS = {
+    "af", "am", "ar", "az", "be", "bg", "bn", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es",
+    "et", "eu", "fa", "fi", "fil", "fr", "ga", "gl", "gu", "he", "hi", "hr", "ht", "hu", "hy", "id",
+    "is", "it", "ja", "ka", "kk", "km", "kn", "ko", "lo", "lt", "lv", "mk", "ml", "mn", "mr", "ms",
+    "my", "nb", "ne", "nl", "no", "pa", "pl", "ps", "pt", "ro", "ru", "si", "sk", "sl", "so", "sq",
+    "sr", "sv", "sw", "ta", "te", "th", "tl", "tr", "uk", "ur", "uz", "vi", "zh", "zu",
+}
+# en_CA / fr-FR inside a path segment (lower-case language, upper-case region), e.g. /kb/123_CA_en_CA.
+# The language must start the segment or follow a separator, so an ID such as x9de_CA isn't German.
+INLINE_LOCALE = re.compile(r"(?<![A-Za-z0-9])([a-z]{2,3})[_-]([A-Z]{2})(?![A-Za-z0-9])")
+
+
+def guess_locale(url: str) -> str:
+    """Best-effort locale from a URL: /de-de/, /ca/fr/, /fr/, ..._fr_CA, or fr.example.com."""
+    parts = urllib.parse.urlsplit(url or "")
+    segs = [s for s in parts.path.lower().split("/") if s][:4]
+    for s in segs:
+        m = re.fullmatch(r"([a-z]{2,3})[-_]([a-z]{2}|\d{3}|hans|hant)", s)
+        if m and m.group(1) in LANGS:
+            region = m.group(2)
+            return f"{m.group(1)}-{region.upper() if len(region) == 2 else region.title()}"
+    for a, b in zip(segs, segs[1:]):                     # /{country}/{language}/
+        if len(a) == 2 and len(b) == 2 and b in LANGS:
+            return f"{b}-{a.upper()}"
+    for s in segs:
+        if s in LANGS:
+            return s
+    inline = [m for m in INLINE_LOCALE.finditer(parts.path) if m.group(1) in LANGS]
+    if inline:                                           # the last one is usually the locale suffix
+        return f"{inline[-1].group(1)}-{inline[-1].group(2)}"
+    sub = (parts.hostname or "").split(".")[0]
+    return sub if sub in LANGS else ""
+
+
+def _same_locale(a: str, b: str) -> bool:
+    (la, _, ra), (lb, _, rb) = a.lower().partition("-"), b.lower().partition("-")
+    return la == lb and (not ra or not rb or ra == rb)
 
 
 def redirect_note(requested: str, final: str):
     """Return (note, is_suspect) when the fetched URL ended somewhere else.
 
-    A localized slug (/de/kb/how-to -> /de/kb/anleitung) is normal. A different site, a
-    different locale segment, or a bounce to a home/section page is suspect."""
+    Short links and localized slugs (/kb/123 -> /fr-ca/help/titre-de-l-article/123) are normal.
+    A different site, a different locale, or a bounce to a home/section page is suspect."""
     if not final or final == requested:
         return None, False
     a, b = urllib.parse.urlsplit(requested), urllib.parse.urlsplit(final)
     if a.path.rstrip("/").lower() == b.path.rstrip("/").lower() and a.netloc.lower() == b.netloc.lower():
         return None, False
     host = lambda u: u.netloc.lower().removeprefix("www.")  # noqa: E731
+    la, lb = guess_locale(requested), guess_locale(final)
     suspect = (host(a) != host(b)
-               or _locale_segments(a.path) != _locale_segments(b.path)
+               or bool(la and lb and not _same_locale(la, lb))
                or len([s for s in b.path.split("/") if s]) < min(2, len([s for s in a.path.split("/") if s])))
     return f"redirected to {final}", suspect
 
@@ -162,6 +209,34 @@ def _pick_root(soup, h1):
     return soup.body or soup
 
 
+def _chars(el) -> int:
+    return len(re.sub(r"\s+", "", el.get_text()))
+
+
+def _link_chars(el) -> int:
+    return sum(_chars(a) for a in el.find_all("a"))
+
+
+def _refine_root(h1, root):
+    """Some sites wrap the whole page (menus, sidebar, footer) in <main>. Climb from the title
+    towards root and stop below the first level that mostly adds link lists."""
+    if h1 is None or not any(p is root for p in h1.parents):
+        return root
+    node = h1
+    while node is not root:
+        parent = node.parent
+        added = _chars(parent) - _chars(node)
+        added_links = _link_chars(parent) - _link_chars(node)
+        if added > 200 and added_links > 0.5 * added:
+            break
+        node = parent
+    if node is root:
+        return root
+    # Keep the narrower block only if it still holds a fair share of the root's non-link text.
+    plain = _chars(root) - _link_chars(root)
+    return node if plain <= 0 or _chars(node) >= 0.3 * plain else root
+
+
 def _prefix(el, root) -> str:
     for p in [el, *el.parents]:
         if p.name in HEADINGS:
@@ -202,6 +277,7 @@ def extract_bs4(html: str) -> str:
             continue
         tag.decompose()
 
+    root = _refine_root(h1, root)
     for br in root.find_all("br"):
         br.replace_with("\n")
 

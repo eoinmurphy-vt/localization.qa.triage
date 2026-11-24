@@ -21,6 +21,15 @@
   site or the home page; counts words correctly for Chinese, Japanese and Thai; recognises
   bot-check pages.
 - Packaging is now `python tools/package.py` (works on Windows without `zip`).
+- From the first real batch:
+  - Extraction trims sites that wrap the whole page (menus, sidebar, footer) in `<main>`.
+  - Short links that redirect to the full article URL are no longer flagged; locales such as
+    `…_fr_CA` in a URL are recognised; redirects to another site (e.g. a sign-in page) are.
+  - `batch.py init` takes `--source-locale` / `--target-locale`, skips exact duplicate rows,
+    warns when different rows share the same links (broken links in the sheet) and carries the
+    sheet's title column into the report.
+  - Template problems repeated on every page (e.g. an untranslated date label) are reported once
+    per batch, not per article.
 
 ## v0.1.0 – pilot
 - First version: single-article and batch triage, generic mode, optional client assets.

@@ -94,4 +94,6 @@ Content that could be offensive, inappropriate or clearly unsuitable for the tar
 - Plausibly intentional adaptation (localized examples, local offers, local contact details),
   except as Minor/Low "may be intentional".
 - Page furniture that differs between locales (menus, footers, related links).
+- Site-template text that repeats on every page (e.g. an untranslated "Updated" date label, view or
+  vote counters): report it once in the batch summary, not per article.
 - Source-text errors that the translator correctly worked around.

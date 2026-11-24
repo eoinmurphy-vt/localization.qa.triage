@@ -92,8 +92,12 @@ Work in a folder per batch, e.g. `runs/<batch>/`.
    ambiguity or the guessed locales look wrong.
 2. **Get the texts.** With network access, `python scripts/batch.py fetch runs/<batch>/batch.jsonl
    --texts runs/<batch>/texts` saves both texts and the pre-check for every article and lists
-   pages to check. Without it (or if the site blocks scripted requests), use the web fetch tool
-   one article at a time.
+   pages to check. Then `python scripts/batch.py unreadable runs/<batch>/batch.jsonl --texts
+   runs/<batch>/texts --out runs/<batch>/results.jsonl` records every page that returned an error
+   or redirected to another site (e.g. a sign-in page) as Check manually, so you only analyse
+   readable articles. Tell the user how many there were and why: dead or private links in the
+   sheet are a finding in their own right. Without network access (or if the site blocks
+   scripted requests), use the web fetch tool one article at a time.
 3. **Analyse** each article as above. As soon as an article is done, append its result object as
    one line to `runs/<batch>/results.jsonl` (schema in `references/output_format.md`), so progress
    survives an interrupted session. Don't paste article text into the chat.
@@ -126,3 +130,6 @@ one line per article, and suggest the user switch to the copy-paste prompt for s
   intentional".
 - Don't comment on the quality of the source text unless a source error has clearly carried into
   the target.
+- Problems in the site template that repeat on every page (a date or label left in the source
+  language, view counters, menus) aren't article issues. Leave them out of the per-article results
+  and mention them once in the batch summary.

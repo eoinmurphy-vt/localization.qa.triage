@@ -90,6 +90,8 @@ Count only issues with High or Medium confidence:
   target quote. Add a short English gloss when a target quote's meaning isn't obvious.
 - At most 8 issues per article, most severe first. If there are more, say how many and of what kind.
 - A clean article is a valid result. Don't invent or inflate issues.
+- Problems in the page template that repeat on every article (e.g. a date or label left in the
+  source language, view counters) aren't article issues: mention them once at the end.
 - Don't retranslate or rewrite; suggest a fix only when it is short and obvious.
 - Write in English (or the language I write in). Quotes stay in their original language.
 

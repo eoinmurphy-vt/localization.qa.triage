@@ -76,6 +76,29 @@ def test_extract_keeps_title_div_text_and_cta(tmp_path):
     assert status["status"] == "suspect" and "short text" in status["notes"][0]
 
 
+LINKS = "".join(f'<li><a href="/p{n}">Product page number {n}</a></li>' for n in range(30))
+WRAPPED_PAGE = f"""<html><body><div id="main" role="main">
+<header class="top"><div class="lang"><a href="/en">English (US)</a><a href="/fr">Français</a></div></header>
+<div class="grid">
+ <div class="article-content"><section><h1>How do I reset my password?</h1></section>
+  <p>Open Settings and select Account. Then select Reset password and follow the steps.</p>
+  <p>You'll get an email with a link that is valid for 24 hours.</p></div>
+ <div class="side"><ul>{LINKS}</ul></div>
+</div>
+<div class="bottom"><h4>Products</h4><ul>{LINKS}</ul><p>© 2026 Example Ltd. All rights reserved.</p></div>
+</div></body></html>"""
+
+
+def test_extract_trims_page_wrapped_in_main(tmp_path):
+    page = tmp_path / "wrapped.html"
+    page.write_text(WRAPPED_PAGE, encoding="utf-8")
+    text, _ = extract_text.extract(str(page))
+    assert text.splitlines() == [
+        "# How do I reset my password?",
+        "Open Settings and select Account. Then select Reset password and follow the steps.",
+        "You'll get an email with a link that is valid for 24 hours."]
+
+
 def test_extract_reports_unreadable_source(tmp_path):
     res = run(SCRIPTS / "extract_text.py", tmp_path / "missing.html", check=False)
     assert res.returncode == 1
@@ -96,6 +119,12 @@ def test_word_count_handles_scripts_without_spaces():
 def test_redirects(final, note, suspect):
     got_note, got_suspect = extract_text.redirect_note("https://x.com/de-de/kb/a", final)
     assert (got_note is not None, got_suspect) == (note, suspect)
+
+
+def test_short_link_redirect_to_full_article_is_not_suspect():
+    short = "https://x.com/kb/A1b2_CA_fr_CA"
+    assert extract_text.redirect_note(short, "https://x.com/help/fr-ca/article/titre/A1b2_CA_fr_CA")[1] is False
+    assert extract_text.redirect_note(short, "https://x.com/help/en-ca/article/title/A1b2_CA_en_CA")[1] is True
 
 
 # ---------------------------------------------------------------- precheck
@@ -200,13 +229,13 @@ def test_report_merges_folders_dedupes_and_lists_unprocessed(tmp_path):
         encoding="utf-8")
     batch_file = tmp_path / "batch.jsonl"
     batch_file.write_text("".join(json.dumps({"id": i, "source_url": "https://e.com/en/a",
-                                              "target_url": "https://e.com/de/a"}) + "\n"
+                                              "target_url": "https://e.com/de/a", "title": f"T{i[-1]}"}) + "\n"
                                   for i in ("Row 2", "Row 3", "Row 4")), encoding="utf-8")
     out = tmp_path / "r.xlsx"
     proc = run(SCRIPTS / "build_report.py", chunks, "--batch", batch_file, "--out", out)
     assert "more than once" in proc.stderr
-    assert [(r[1], r[2]) for r in report_rows(out)] == [
-        ("Row 2", "High"), ("Row 3", "Medium"), ("Row 4", "Not processed")]
+    assert [(r[1], r[2], r[9]) for r in report_rows(out)] == [     # titles come from the batch
+        ("Row 2", "High", "T2"), ("Row 3", "Medium", "T3"), ("Row 4", "Not processed", "T4")]
     quote = openpyxl.load_workbook(out)["Issues"]["F2"]
     assert quote.value == "=HYPERLINK(1)" and quote.data_type == "s"   # page text never becomes a formula
 
@@ -220,6 +249,27 @@ def test_guess_locale():
     assert batch.guess_locale("https://fr.example.com/a") == "fr"
     assert batch.guess_locale("https://e.com/zh-hans/a") == "zh-Hans"
     assert batch.guess_locale("https://e.com/help/article-1") == ""
+    assert batch.guess_locale("https://e.com/kb/A1b2_US_en_US") == "en-US"
+    assert batch.guess_locale("https://e.com/kb/X9de_FR_fr_FR") == "fr-FR"   # 'de' inside the ID
+
+
+def test_batch_init_duplicates_shared_links_and_locale_override(tmp_path):
+    csv_file = tmp_path / "pairs.csv"
+    csv_file.write_text(
+        "ID,Title,Source URL,Target URL\n"
+        "A1,One,https://e.com/kb/A1,https://e.com/kb/A1-t\n"
+        "A2,Two,https://e.com/kb/A2,https://e.com/kb/A2-t\n"
+        "A1,One again,https://e.com/kb/A1,https://e.com/kb/A1-t\n"          # exact duplicate
+        ",Three,https://e.com/kb/,https://e.com/kb/-t\n"                    # broken links...
+        ",Four,https://e.com/kb/,https://e.com/kb/-t\n", encoding="utf-8")  # ...shared by two rows
+    out = tmp_path / "batch.jsonl"
+    proc = run(SCRIPTS / "batch.py", "init", csv_file, "--out", out,
+               "--source-locale", "en-US", "--target-locale", "fr-FR")
+    items = [json.loads(l) for l in out.read_text(encoding="utf-8").splitlines()]
+    assert [i["id"] for i in items] == ["A1", "A2", "Row 5", "Row 6"]
+    assert {(i["source_locale"], i["target_locale"]) for i in items} == {("en-US", "fr-FR")}
+    assert "row 4 repeats row 2 (A1)" in proc.stdout
+    assert "WARNING: rows 5, 6" in proc.stdout
 
 
 def test_batch_init_from_xlsx_with_hyperlinked_titles(tmp_path):
@@ -236,8 +286,9 @@ def test_batch_init_from_xlsx_with_hyperlinked_titles(tmp_path):
     out = tmp_path / "b" / "batch.jsonl"
     proc = run(SCRIPTS / "batch.py", "init", xlsx, "--out", out)
     items = [json.loads(l) for l in out.read_text(encoding="utf-8").splitlines()]
-    assert [(i["id"], i["target_url"], i["target_locale"]) for i in items] == [
-        ("A-1", "https://e.com/de-de/backup", "de-DE"), ("A-2", "https://e.com/de-de/restore", "de-DE")]
+    assert [(i["id"], i["target_url"], i["target_locale"], i["title"]) for i in items] == [
+        ("A-1", "https://e.com/de-de/backup", "de-DE", "Backup"),
+        ("A-2", "https://e.com/de-de/restore", "de-DE", "Restore")]
     assert 'Source URL: C "Source"' in proc.stdout and "1 row(s) without both URLs skipped" in proc.stdout
 
 
@@ -268,6 +319,22 @@ def test_batch_fetch_and_status(tmp_path):
     out = run(SCRIPTS / "batch.py", "status", batch_file, results, tmp_path / "none.jsonl").stdout
     assert out.splitlines()[0] == "1/2 done: High 1"
     assert "Remaining (1): Row 3" in out
+
+
+def test_batch_unreadable_records_check_manually(tmp_path):
+    batch_file = tmp_path / "batch.jsonl"
+    items = [{"id": "ok", "key": "ok", "source_url": str(FIX / "src.html"), "target_url": str(FIX / "tgt.html")},
+             {"id": "gone", "key": "gone", "source_url": str(tmp_path / "no.html"),
+              "target_url": str(tmp_path / "no2.html"), "title": "Deleted article"}]
+    batch_file.write_text("".join(json.dumps(i) + "\n" for i in items), encoding="utf-8")
+    texts, results = tmp_path / "texts", tmp_path / "results.jsonl"
+    run(SCRIPTS / "batch.py", "fetch", batch_file, "--texts", texts)
+    for _ in range(2):                                    # a second run adds nothing twice
+        proc = run(SCRIPTS / "batch.py", "unreadable", batch_file, "--texts", texts, "--out", results)
+    lines = [json.loads(l) for l in results.read_text(encoding="utf-8").splitlines()]
+    assert [(r["id"], r["extraction"], r["title"]) for r in lines] == [("gone", "failed", "Deleted article")]
+    assert "Recorded 0" in proc.stdout
+    assert extract_text.word_count("A short but real help article. " * 9) >= extract_text.MIN_WORDS
 
 
 # ---------------------------------------------------------------- skill package and prompt

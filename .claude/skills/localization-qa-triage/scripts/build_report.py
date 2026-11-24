@@ -356,11 +356,17 @@ def main():
         sys.exit(2)
 
     if args.batch:
+        fields = ("title", "source_url", "target_url", "source_locale", "target_locale")
+        batch_items = {str(i.get("id")): i for i in load_batch(args.batch)}
+        for a in articles:              # fill gaps (e.g. the spreadsheet's title) from the batch
+            item = batch_items.get(str(a.get("id")), {})
+            for k in fields:
+                if not a.get(k) and item.get(k):
+                    a[k] = item[k]
         done = {str(a.get("id")) for a in articles}
-        for item in load_batch(args.batch):
-            if str(item.get("id")) not in done:
-                articles.append({**{k: item.get(k) for k in ("id", "source_url", "target_url",
-                                                             "source_locale", "target_locale")},
+        for aid, item in batch_items.items():
+            if aid not in done:
+                articles.append({"id": item.get("id"), **{k: item.get(k) for k in fields},
                                  "risk": "Not processed", "_not_processed": True,
                                  "extraction": "", "issues": [], "summary": ""})
 
